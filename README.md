@@ -42,3 +42,6 @@ Captures : `BILAN_TAB=0..3`, `BILAN_SIZE=1024x700`,
 
 Polices : New Computer Modern (GUST Font License) et DejaVu Sans Mono
 (licence Bitstream Vera), `fonts/LICENCES.txt`.
+
+Licence propriétaire, versions gratuites : `LICENSE`. Téléchargements :
+la page Releases du dépôt.

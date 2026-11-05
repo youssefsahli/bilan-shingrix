@@ -1,0 +1,56 @@
+BILAN SHINGRIX PROPRIETARY LICENSE
+Copyright (c) 2026 Youssef Sahli. All rights reserved.
+
+1. DEFINITIONS
+   "Software" means the Bilan Shingrix application, including its source code,
+   binaries, documentation, templates, and any associated materials published
+   in this repository.
+   "Official Release" means a compiled binary distribution of the Software
+   published by the copyright holder on the Releases page of this repository.
+
+2. GRANT OF USE
+   Subject to the terms of this license, the copyright holder grants you a
+   free of charge, non-exclusive, non-transferable, revocable license to:
+   a) download and use Official Releases of the Software for personal or
+      professional purposes, including use in a commercial pharmacy setting;
+   b) view and study the source code published in this repository.
+
+3. RESTRICTIONS
+   Except as expressly permitted above, you may NOT:
+   a) copy, redistribute, sublicense, rent, lease, or sell the Software or
+      any portion of it;
+   b) modify, adapt, translate, or create derivative works of the Software;
+   c) compile, build, or distribute binaries from the source code;
+   d) remove or alter any copyright, trademark, or attribution notices;
+   e) use the source code, in whole or in part, in any other software
+      project, whether open source or proprietary.
+
+4. CONTRIBUTIONS
+   Unless explicitly agreed otherwise in writing, any contribution
+   intentionally submitted to this repository is assigned to the copyright
+   holder, who may use, modify, and relicense it without restriction.
+
+5. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+   THE SOFTWARE IS NOT A MEDICAL DEVICE AND IS NOT A SUBSTITUTE FOR
+   PROFESSIONAL CLINICAL JUDGMENT. YOU ARE SOLELY RESPONSIBLE FOR COMPLIANCE
+   WITH APPLICABLE HEALTH DATA REGULATIONS (INCLUDING GDPR) IN YOUR USE OF
+   THE SOFTWARE.
+
+6. LIMITATION OF LIABILITY
+   IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES,
+   OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE,
+   ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+   OTHER DEALINGS IN THE SOFTWARE.
+
+7. TERMINATION
+   This license terminates automatically if you breach any of its terms.
+   Upon termination you must cease all use of the Software and destroy all
+   copies in your possession.
+
+8. THIRD-PARTY FONTS
+   The fonts in fonts/ are not covered by this license. New Computer
+   Modern is distributed under the GUST Font License and DejaVu Sans Mono
+   under the Bitstream Vera license; see fonts/LICENCES.txt.

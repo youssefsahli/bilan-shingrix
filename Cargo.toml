@@ -1,0 +1,23 @@
+[package]
+name = "bilan-shingrix"
+version = "0.1.0"
+edition = "2021"
+description = "Registre des doses de Shingrix à l'officine : saisie en colonnes, graphiques, prévisions des 2es doses, bilan PDF."
+publish = false
+
+[dependencies]
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "6"
+rfd = "0.15"
+open = "5"
+typst = "0.13"
+typst-pdf = "0.13"
+
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1

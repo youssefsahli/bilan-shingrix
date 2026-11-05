@@ -22,6 +22,58 @@ pub struct Dose {
     pub birth: String,
     /// Les initiales de qui a injecté, en capitales (« AS », « YS »).
     pub operator: String,
+    pub prescriber: Prescriber,
+}
+
+/// Qui a prescrit la dose : l'officine (ce qu'on veut compter) ou un
+/// médecin. Inconnu pour un registre d'avant ou un import qui ne le dit pas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Prescriber {
+    #[default]
+    Inconnu,
+    Officine,
+    Medecin,
+}
+
+impl Prescriber {
+    /// Le mot du registre.
+    pub fn short(self) -> &'static str {
+        match self {
+            Prescriber::Inconnu => "?",
+            Prescriber::Officine => "off.",
+            Prescriber::Medecin => "méd.",
+        }
+    }
+    /// Le mot du CSV.
+    pub fn word(self) -> &'static str {
+        match self {
+            Prescriber::Inconnu => "",
+            Prescriber::Officine => "officine",
+            Prescriber::Medecin => "medecin",
+        }
+    }
+    /// `officine`, `off`, `pharmacien`, `o` ; `medecin`, `méd`, `m` ; vide.
+    pub fn read(s: &str) -> Option<Prescriber> {
+        let f = fold(s);
+        let f = f.trim_end_matches('.');
+        match f {
+            "" | "?" => Some(Prescriber::Inconnu),
+            _ if ["officine", "off", "o", "pharmacien", "pharmacie", "ph"].contains(&f) => {
+                Some(Prescriber::Officine)
+            }
+            _ if ["medecin", "med", "m", "dr"].contains(&f) => Some(Prescriber::Medecin),
+            _ => None,
+        }
+    }
+    /// L'ordre du bouton de la ligne en cours de modification.
+    pub fn next(self) -> Prescriber {
+        match self {
+            Prescriber::Officine => Prescriber::Medecin,
+            Prescriber::Medecin => Prescriber::Inconnu,
+            Prescriber::Inconnu => Prescriber::Officine,
+        }
+    }
 }
 
 /// Les initiales d'un opérateur, lues sans égard à la casse : de 1 à 5
@@ -448,6 +500,8 @@ pub struct OpRow {
     pub doses: usize,
     pub d1: usize,
     pub d2: usize,
+    /// Doses qu'il a prescrites lui-même, à l'officine.
+    pub pharmacy: usize,
     /// Patients nommés distincts.
     pub patients: usize,
     pub mean_age: Option<f64>,
@@ -466,6 +520,10 @@ pub struct Stats {
     pub to: String,
     pub d1: usize,
     pub d2: usize,
+    /// Doses prescrites à l'officine, sur ordonnance d'un médecin ; le reste
+    /// n'a pas de prescripteur connu.
+    pub by_pharmacy: usize,
+    pub by_doctor: usize,
     /// Personnes distinctes vaccinées dans la période (nommées), plus les
     /// doses sans nom.
     pub people: usize,
@@ -506,6 +564,7 @@ fn median(mut v: Vec<i64>) -> Option<i64> {
 struct OpAcc {
     d1: usize,
     d2: usize,
+    pharmacy: usize,
     patients: std::collections::BTreeSet<String>,
     ages: (u64, u64),
     gaps: Vec<i64>,
@@ -565,6 +624,14 @@ pub fn stats(doses: &[Dose], from: &str, to: &str) -> Stats {
             m.0 += 1;
             op.d1 += 1;
         }
+        match d.prescriber {
+            Prescriber::Officine => {
+                s.by_pharmacy += 1;
+                op.pharmacy += 1;
+            }
+            Prescriber::Medecin => s.by_doctor += 1,
+            Prescriber::Inconnu => {}
+        }
         *op.months.entry(month).or_default() += 1;
         if d.date > op.last {
             op.last = d.date.clone();
@@ -618,6 +685,7 @@ pub fn stats(doses: &[Dose], from: &str, to: &str) -> Stats {
             doses: a.d1 + a.d2,
             d1: a.d1,
             d2: a.d2,
+            pharmacy: a.pharmacy,
             patients: a.patients.len(),
             mean_age: (a.ages.1 > 0).then(|| a.ages.0 as f64 / a.ages.1 as f64),
             gaps: a.gaps.len(),
@@ -675,6 +743,127 @@ pub fn months_said(days: Option<i64>) -> String {
         .unwrap_or_else(|| "—".into())
 }
 
+// ---------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------
+
+/// Ce qu'un import a fait.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Imported {
+    pub added: usize,
+    /// Déjà au registre : même jour, même patient.
+    pub known: usize,
+    /// Lignes illisibles : (numéro, raison).
+    pub refused: Vec<(usize, String)>,
+}
+
+/// Lit un CSV au format de l'export
+/// (`date;dose;patient;age;ddn;operateur;prescripteur`) et l'ajoute au
+/// registre. Une ligne d'en-tête fixe l'ordre des colonnes (les autres
+/// sont ignorées) ; sans elle, l'ordre de l'export. Une dose vide se déduit : D2 quand le patient
+/// a une D1 sans D2 d'au moins quatre semaines, sinon D1. Une ligne déjà
+/// au registre (même jour, même patient) n'est pas reprise.
+pub fn import_csv(store: &mut Store, text: &str, today: &str) -> Imported {
+    let mut out = Imported::default();
+    let mut rows: Vec<(usize, Dose)> = Vec::new();
+    const NAMES: [&str; 7] = [
+        "date",
+        "dose",
+        "patient",
+        "age",
+        "ddn",
+        "operateur",
+        "prescripteur",
+    ];
+    let mut place: [Option<usize>; 7] = std::array::from_fn(Some);
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        let line = line.trim_start_matches('\u{feff}').trim();
+        if line.is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split(';').map(str::trim).collect();
+        if i == 0 && fold(f[0]) == "date" {
+            let heads: Vec<String> = f.iter().map(|h| fold(h)).collect();
+            place = NAMES.map(|k| heads.iter().position(|h| h == k));
+            continue;
+        }
+        let at = |k: usize| place[k].and_then(|p| f.get(p)).copied().unwrap_or("");
+        let Some(date) = parse_date(at(0), today) else {
+            out.refused.push((n, "date illisible".into()));
+            continue;
+        };
+        let rank = match at(1).to_uppercase().trim_start_matches('D') {
+            "1" => 1,
+            "2" => 2,
+            "" => 0,
+            _ => {
+                out.refused.push((n, "dose illisible".into()));
+                continue;
+            }
+        };
+        let birth = match at(4) {
+            "" => String::new(),
+            b => match parse_date(b, today) {
+                Some(b) => b,
+                None => {
+                    out.refused.push((n, "DDN illisible".into()));
+                    continue;
+                }
+            },
+        };
+        let Some(operator) = operator_key(at(5)) else {
+            out.refused.push((n, "opérateur manquant".into()));
+            continue;
+        };
+        let Some(prescriber) = Prescriber::read(at(6)) else {
+            out.refused.push((n, "prescripteur illisible".into()));
+            continue;
+        };
+        rows.push((
+            n,
+            Dose {
+                id: 0,
+                date,
+                rank,
+                name: at(2).to_owned(),
+                age: at(3).parse().ok(),
+                birth,
+                operator,
+                prescriber,
+            },
+        ));
+    }
+    rows.sort_by(|a, b| a.1.date.cmp(&b.1.date).then(a.0.cmp(&b.0)));
+    let same = |a: &Dose, b: &Dose| {
+        !a.name.trim().is_empty()
+            && fold(&a.name) == fold(&b.name)
+            && (a.birth.is_empty() || b.birth.is_empty() || a.birth == b.birth)
+    };
+    for (_, mut d) in rows {
+        if store.doses.iter().any(|x| x.date == d.date && same(x, &d)) {
+            out.known += 1;
+            continue;
+        }
+        if d.rank == 0 {
+            let mut mine: Vec<&Dose> = store.doses.iter().filter(|x| same(x, &d)).collect();
+            mine.sort_by(|a, b| a.date.cmp(&b.date));
+            let open_d1 = mine
+                .iter()
+                .rev()
+                .find(|x| x.date < d.date)
+                .filter(|x| x.rank == 1);
+            d.rank = match open_d1 {
+                Some(x) if days_between(&x.date, &d.date).is_some_and(|g| g >= 28) => 2,
+                _ => 1,
+            };
+        }
+        store.add(d);
+        out.added += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,6 +877,7 @@ mod tests {
             age: None,
             birth: birth.into(),
             operator: "ys".into(),
+            prescriber: Prescriber::Officine,
         }
     }
 
@@ -826,5 +1016,78 @@ mod tests {
         std::fs::write(&path, "{x").unwrap();
         assert!(Store::load(&path).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Le CSV de l'export se relit ; une dose vide se déduit ; un second
+    /// import du même fichier n'ajoute rien.
+    #[test]
+    fn an_import_infers_the_dose_and_skips_what_is_known() {
+        let mut s = Store::default();
+        s.add(dose("2026-03-02", 1, "Martin Paul", "1950-01-01"));
+        let csv = "\u{feff}date;dose;patient;age;ddn;operateur\n\
+            02/05/2026;;MARTIN Paul;;01/01/1950;ys\n\
+            10/05/2026;;Durand Anne;;;as\n\
+            20/05/2026;;Durand Anne;;;as\n\
+            12/07/2026;;Durand Anne;;;cl\n\
+            12/07/2026;D1;Sans Opérateur;;;\n\
+            xx;1;Faux;;;ys\n";
+        let r = import_csv(&mut s, csv, "2026-11-04");
+        assert_eq!(r.added, 4);
+        assert_eq!(r.refused.iter().map(|x| x.0).collect::<Vec<_>>(), [6, 7]);
+        let ranks: Vec<(String, u8)> = s.doses.iter().map(|d| (d.date.clone(), d.rank)).collect();
+        assert_eq!(
+            ranks,
+            [
+                ("2026-03-02".into(), 1),
+                ("2026-05-02".into(), 2),
+                ("2026-05-10".into(), 1),
+                // Dix jours après la D1 : pas une D2.
+                ("2026-05-20".into(), 1),
+                ("2026-07-12".into(), 2),
+            ]
+        );
+        assert_eq!(s.doses[1].operator, "YS");
+        assert_eq!(s.doses[1].prescriber, Prescriber::Inconnu);
+        let again = import_csv(&mut s, csv, "2026-11-04");
+        assert_eq!((again.added, again.known), (0, 4));
+
+        // Un en-tête dans un autre ordre, des colonnes en plus.
+        let mut s = Store::default();
+        let csv = "date;operateur;quantite;prescripteur;patient\n\
+            01/09/2026;ng;1;Médecin;A\n\
+            02/09/2026;ng;1;off.;B\n\
+            03/09/2026;ng;1;voisin;C\n";
+        let r = import_csv(&mut s, csv, "2026-11-04");
+        assert_eq!((r.added, r.refused.len()), (2, 1));
+        assert_eq!(
+            s.doses.iter().map(|d| d.prescriber).collect::<Vec<_>>(),
+            [Prescriber::Medecin, Prescriber::Officine]
+        );
+        let st = stats(&s.doses, "", "2026-11-04");
+        assert_eq!(
+            (st.by_pharmacy, st.by_doctor, st.team[0].pharmacy),
+            (1, 1, 1)
+        );
+    }
+
+    /// `BILAN_IMPORT_CHECK=/chemin.csv cargo test import_check -- --nocapture` :
+    /// ce qu'un import ferait sur un registre vide, en comptes.
+    #[test]
+    fn import_check() {
+        let Some(path) = std::env::var_os("BILAN_IMPORT_CHECK") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut s = Store::default();
+        let r = import_csv(&mut s, &text, &today());
+        let d2 = s.doses.iter().filter(|d| d.rank == 2).count();
+        let people = patients(&s.doses).len();
+        println!(
+            "ajoutées {} (D1 {}, D2 {d2}), déjà là {}, refusées {:?}, patients {people}",
+            r.added,
+            r.added - d2,
+            r.known,
+            r.refused
+        );
     }
 }

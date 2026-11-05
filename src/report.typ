@@ -152,6 +152,7 @@ seulement des comptes, et les initiales de l'équipe.
 )
 
 #deftable(
+  ([Officine], [doses prescrites par l'équipe elle-même ; les autres l'ont été par un médecin.]),
   ([Complets], [patients ayant reçu leurs deux doses, parmi ceux qui ont commencé sur la période.]),
   ([Délai], [médiane du temps entre la D1 et la D2 d'un même patient.]),
   ([Fenêtre], [D2 faites entre 2 et 6 mois après la D1, comme le prévoit le schéma.]),
@@ -200,11 +201,11 @@ elle est connue.
 
   #set text(hyphenate: false)
   #table(
-    columns: (1fr,) + (auto,) * 9,
-    align: (left, ..range(9).map(_ => right)),
+    columns: (1fr,) + (auto,) * 10,
+    align: (left, ..range(10).map(_ => right)),
     inset: (x: 0.42em, y: 0.32em),
     table.header(
-      ..("Opér.", "Doses", "Part", "D1", "D2", "Patients", "Âge", "Délai", "Fenêtre", "Dernière")
+      ..("Opér.", "Doses", "Part", "D1", "D2", "Off.", "Patients", "Âge", "Délai", "Fenêtre", "Dernière")
         .map(h => strong(h)),
     ),
     ..equipe.enumerate().map(((i, o)) => (

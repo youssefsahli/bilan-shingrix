@@ -8,10 +8,18 @@ barre d'onglets, la ligne de mode, la zone d'écho. Le PDF a celui d'un
 manuel GNU imprimé par Texinfo, en Computer Modern.
 
 Onglets : Saisie · Bilan · Équipe · Rappels. Menu Fichier : Bilan PDF,
-Exporter CSV.
+Importer CSV, Exporter CSV.
+
+Importer CSV lit le format de l'export
+(`date;dose;patient;age;ddn;operateur;prescripteur`), dans l'ordre de
+l'en-tête s'il y en a un. Prescripteur : `officine`, `medecin` ou vide.
+Une dose vide se déduit : D2 quand le patient a une D1 sans D2 d'au moins
+quatre semaines, sinon D1. Une dose déjà au registre (même jour, même
+patient) n'est pas reprise.
 
 Saisie : Date · Dose · Patient · Âge · DDN · Opér. (obligatoire, casse
-indifférente). Entrée ajoute, ↓ ↑ choisit un patient connu, C-1 / C-2 la
+indifférente) · Prescrit (off. : par l'équipe, ce qu'on compte ; méd. :
+sur ordonnance d'un médecin). Entrée ajoute, ↓ ↑ choisit un patient connu, C-1 / C-2 la
 dose, Échap vide, C-p le PDF, C-TAB l'onglet suivant. Date et opérateur
 restent d'une saisie à l'autre. Un clic sur une ligne du registre la
 modifie ; Supprimer demande confirmation dans la zone d'écho (o ou n).

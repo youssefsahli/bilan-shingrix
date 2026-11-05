@@ -52,6 +52,7 @@ struct Buf {
     age: String,
     birth: String,
     operator: String,
+    prescriber: model::Prescriber,
 }
 
 impl Buf {
@@ -61,6 +62,7 @@ impl Buf {
             date: self.date.clone(),
             operator: self.operator.clone(),
             rank: 1,
+            prescriber: model::Prescriber::Officine,
             ..Buf::default()
         }
     }
@@ -73,6 +75,7 @@ impl Buf {
             age: d.age.map(|a| a.to_string()).unwrap_or_default(),
             birth: model::french(&d.birth),
             operator: d.operator.clone(),
+            prescriber: d.prescriber,
         }
     }
 
@@ -106,6 +109,7 @@ impl Buf {
             rank: if self.rank == 2 { 2 } else { 1 },
             name: self.name.split_whitespace().collect::<Vec<_>>().join(" "),
             age,
+            prescriber: self.prescriber,
             birth,
             operator,
         })
@@ -186,6 +190,7 @@ impl App {
             entry: Buf {
                 date: model::french(&today),
                 rank: 1,
+                prescriber: model::Prescriber::Officine,
                 ..Buf::default()
             },
             today,
@@ -442,24 +447,24 @@ fn op_color(i: usize) -> Color32 {
 }
 
 /// Les colonnes de la saisie, en caractères : date, dose, patient (le
-/// reste), âge, DDN, opérateur, boutons.
-fn entry_columns(ui: &egui::Ui) -> [f32; 7] {
+/// reste), âge, DDN, opérateur, prescripteur, boutons.
+fn entry_columns(ui: &egui::Ui) -> [f32; 8] {
     let c = t::ch(ui);
-    let fixed = [13.0, 15.0, 0.0, 6.0, 13.0, 7.0, 22.0].map(|n: f32| n * c);
-    let name = (ui.available_width() - fixed.iter().sum::<f32>()).max(24.0 * c);
+    let fixed = [13.0, 15.0, 0.0, 6.0, 13.0, 7.0, 19.0, 22.0].map(|n: f32| n * c);
+    let name = (ui.available_width() - fixed.iter().sum::<f32>()).max(20.0 * c);
     [
-        fixed[0], fixed[1], name, fixed[3], fixed[4], fixed[5], fixed[6],
+        fixed[0], fixed[1], name, fixed[3], fixed[4], fixed[5], fixed[6], fixed[7],
     ]
 }
 
 /// Les colonnes du registre : date, dose, patient, âge, DDN, opérateur,
-/// boutons de la ligne en cours de modification.
-fn register_columns(ui: &egui::Ui) -> [f32; 7] {
+/// prescripteur, boutons de la ligne en cours de modification.
+fn register_columns(ui: &egui::Ui) -> [f32; 8] {
     let c = t::ch(ui);
-    let fixed = [13.0, 6.0, 0.0, 6.0, 13.0, 7.0, 34.0].map(|n: f32| n * c);
-    let name = (ui.available_width() - fixed.iter().sum::<f32>() - 2.0 * c).max(24.0 * c);
+    let fixed = [13.0, 6.0, 0.0, 6.0, 13.0, 7.0, 8.0, 34.0].map(|n: f32| n * c);
+    let name = (ui.available_width() - fixed.iter().sum::<f32>() - 2.0 * c).max(20.0 * c);
     [
-        fixed[0], fixed[1], name, fixed[3], fixed[4], fixed[5], fixed[6],
+        fixed[0], fixed[1], name, fixed[3], fixed[4], fixed[5], fixed[6], fixed[7],
     ]
 }
 
@@ -546,6 +551,13 @@ impl App {
                         {
                             ui.close_menu();
                             self.make_pdf();
+                        }
+                        if ui
+                            .add_enabled(!self.locked, egui::Button::new("Importer CSV…"))
+                            .clicked()
+                        {
+                            ui.close_menu();
+                            self.import_csv();
                         }
                         if ui.button("Exporter CSV…").clicked() {
                             ui.close_menu();
@@ -702,10 +714,9 @@ impl App {
         t::heading(ui, "Nouvelle dose", "Entrée enregistre, C-1 / C-2 la dose");
         let cols = entry_columns(ui);
         ui.horizontal(|ui| {
-            for (w, n) in cols
-                .iter()
-                .zip(["Date", "Dose", "Patient", "Âge", "DDN", "Opér.", ""])
-            {
+            for (w, n) in cols.iter().zip([
+                "Date", "Dose", "Patient", "Âge", "DDN", "Opér.", "Prescrit", "",
+            ]) {
                 cell(ui, *w, |ui| ui.label(t::shadow(n)));
             }
         });
@@ -787,6 +798,15 @@ impl App {
                 enter |= read_enter(ui, &r);
             });
             cell(ui, cols[6], |ui| {
+                use model::Prescriber::{Medecin, Officine};
+                if t::radio(ui, "off.", self.entry.prescriber != Medecin).clicked() {
+                    self.entry.prescriber = Officine;
+                }
+                if t::radio(ui, "méd.", self.entry.prescriber == Medecin).clicked() {
+                    self.entry.prescriber = Medecin;
+                }
+            });
+            cell(ui, cols[7], |ui| {
                 add = ui
                     .add_enabled_ui(!self.locked, |ui| t::button(ui, "Ajouter"))
                     .inner
@@ -881,7 +901,9 @@ impl App {
         t::header_line(
             ui,
             &cols,
-            &["Date", "Dose", "Patient", "Âge", "DDN", "Opér.", ""],
+            &[
+                "Date", "Dose", "Patient", "Âge", "DDN", "Opér.", "Prescr.", "",
+            ],
             c,
         );
         let q = model::fold(&self.search);
@@ -923,7 +945,7 @@ impl App {
         }
     }
 
-    fn row(&mut self, ui: &mut egui::Ui, d: &Dose, cols: &[f32; 7]) -> Option<RowAction> {
+    fn row(&mut self, ui: &mut egui::Ui, d: &Dose, cols: &[f32; 8]) -> Option<RowAction> {
         let c = t::ch(ui);
         let rh = t::row_h(ui);
         let (rect, resp) =
@@ -978,6 +1000,11 @@ impl App {
                 enter |= read_enter(ui, &r);
             });
             cell(ui, cols[6], |ui| {
+                if t::button(ui, buf.prescriber.short()).clicked() {
+                    buf.prescriber = buf.prescriber.next();
+                }
+            });
+            cell(ui, cols[7], |ui| {
                 if t::button(ui, "Enregistrer").clicked() || enter {
                     out = Some(RowAction::Save);
                 }
@@ -1022,6 +1049,11 @@ impl App {
                 (true, None) => none(),
             },
             model::operator_key(&d.operator).map_or_else(none, |k| cl(k).bold()),
+            match d.prescriber {
+                model::Prescriber::Inconnu => none(),
+                model::Prescriber::Medecin => cl("méd.").color(t::SHADOW),
+                model::Prescriber::Officine => cl("off."),
+            },
             if resp.hovered() && !self.locked {
                 cl("clic : modifier").color(t::GREY20)
             } else {
@@ -1261,6 +1293,7 @@ impl App {
                     "Part",
                     "D1",
                     "D2",
+                    "Off.",
                     "Patients",
                     "Âge moy.",
                     "Délai",
@@ -1268,7 +1301,7 @@ impl App {
                     "Dernière",
                 ];
                 let widths =
-                    [12.0, 8.0, 8.0, 7.0, 7.0, 10.0, 11.0, 11.0, 10.0, 12.0].map(|n| n * c);
+                    [12.0, 8.0, 8.0, 7.0, 7.0, 7.0, 10.0, 11.0, 11.0, 10.0, 12.0].map(|n| n * c);
                 t::header_line(ui, &widths, &names, c);
                 let total = s.total();
                 let rh = t::row_h(ui);
@@ -1280,7 +1313,7 @@ impl App {
                     }
                     let mut cells = vec![cl(format!("■ {}", o.key)).bold().color(op_color(i))];
                     for (k, v) in pdf::team_cells(o, total).into_iter().enumerate() {
-                        cells.push(if k == 8 { cl(v) } else { cl(v).right() });
+                        cells.push(if k == 9 { cl(v) } else { cl(v).right() });
                     }
                     paint_row(ui, rect, &widths, &cells);
                     // Les initiales en noir, le carré seul en couleur.
@@ -1293,7 +1326,7 @@ impl App {
                     );
                 }
                 ui.label(t::shadow(
-                    " Délai : médiane D1 → D2.  Fenêtre : D2 faites entre 2 et 6 mois.",
+                    " Off. : prescrites par lui-même.  Délai : médiane D1 → D2.  Fenêtre : D2 entre 2 et 6 mois.",
                 ));
                 t::heading(ui, "Doses par mois et opérateur", "");
                 let groups: Vec<(String, Vec<(f64, Color32)>)> = s
@@ -1570,6 +1603,38 @@ impl App {
         });
     }
 
+    /// Un CSV au format de l'export, la dose pouvant rester vide.
+    fn import_csv(&mut self) {
+        let Some(from) = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv", "txt"])
+            .pick_file()
+        else {
+            self.note = Some("Abandon".into());
+            return;
+        };
+        let text = match std::fs::read(&from) {
+            // Un export de tableur peut être en Latin-1 : ses octets en caractères.
+            Ok(b) => String::from_utf8(b)
+                .unwrap_or_else(|e| e.into_bytes().iter().map(|&c| c as char).collect()),
+            Err(e) => {
+                self.note = Some(format!("{}: {e}", from.display()));
+                return;
+            }
+        };
+        let r = model::import_csv(&mut self.store, &text, &self.today);
+        if r.added > 0 {
+            self.save();
+        }
+        let mut said = format!("{} doses ajoutées, {} déjà là", r.added, r.known);
+        if let Some((n, why)) = r.refused.first() {
+            said.push_str(&format!(
+                ", {} refusées (ligne {n} : {why})",
+                r.refused.len()
+            ));
+        }
+        self.note = Some(said);
+    }
+
     fn export_csv(&mut self) {
         let Some(to) = rfd::FileDialog::new()
             .set_file_name(format!("shingrix-{}.csv", self.today))
@@ -1578,12 +1643,12 @@ impl App {
             self.note = Some("Abandon".into());
             return;
         };
-        let mut out = String::from("date;dose;patient;age;ddn;operateur\n");
+        let mut out = String::from("date;dose;patient;age;ddn;operateur;prescripteur\n");
         let mut rows: Vec<&Dose> = self.store.doses.iter().collect();
         rows.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
         for d in rows {
             out.push_str(&format!(
-                "{};{};{};{};{};{}\n",
+                "{};{};{};{};{};{};{}\n",
                 model::french(&d.date),
                 d.rank,
                 d.name.replace(';', " "),
@@ -1591,7 +1656,8 @@ impl App {
                     .map(|a| a.to_string())
                     .unwrap_or_default(),
                 model::french(&d.birth),
-                d.operator
+                d.operator,
+                d.prescriber.word()
             ));
         }
         self.note = Some(match std::fs::write(&to, out) {
@@ -1803,6 +1869,12 @@ mod tests {
             age: None,
             birth: birth.into(),
             operator: op.into(),
+            // Un sur cinq sur ordonnance d'un médecin.
+            prescriber: if date.ends_with(['0', '5']) {
+                model::Prescriber::Medecin
+            } else {
+                model::Prescriber::Officine
+            },
         }
     }
 

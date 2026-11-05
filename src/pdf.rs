@@ -52,7 +52,7 @@ fn array(items: Vec<String>) -> String {
     format!("({}{})", items.join(", "), if one { "," } else { "" })
 }
 
-/// Les huit chiffres clés : (valeur, mot, précision, couleur) — les mêmes
+/// Les neuf chiffres clés : (valeur, mot, précision, couleur) — les mêmes
 /// que l'onglet « Bilan ».
 pub fn tiles(st: &Stats, pending: &[Pending], expected: &[(String, usize)]) -> Vec<[String; 4]> {
     let count = |d: Due| pending.iter().filter(|p| p.due == d).count();
@@ -63,6 +63,19 @@ pub fn tiles(st: &Stats, pending: &[Pending], expected: &[(String, usize)]) -> V
             "Doses",
             format!("D1 {}, D2 {}", st.d1, st.d2),
             "slate",
+        ),
+        t(
+            st.by_pharmacy.to_string(),
+            "Officine",
+            {
+                let rest = st.total() - st.by_pharmacy - st.by_doctor;
+                if rest > 0 {
+                    format!("médecin {}, ? {rest}", st.by_doctor)
+                } else {
+                    format!("médecin {}", st.by_doctor)
+                }
+            },
+            "green",
         ),
         t(st.people.to_string(), "Patients", String::new(), "slate"),
         t(
@@ -106,13 +119,14 @@ pub fn tiles(st: &Stats, pending: &[Pending], expected: &[(String, usize)]) -> V
     ]
 }
 
-/// Une ligne de la comparaison : les neuf cellules après les initiales.
-pub fn team_cells(o: &model::OpRow, total: usize) -> [String; 9] {
+/// Une ligne de la comparaison : les dix cellules après les initiales.
+pub fn team_cells(o: &model::OpRow, total: usize) -> [String; 10] {
     [
         o.doses.to_string(),
         model::pct((total > 0).then(|| o.doses as f64 / total as f64)),
         o.d1.to_string(),
         o.d2.to_string(),
+        o.pharmacy.to_string(),
         o.patients.to_string(),
         o.mean_age
             .map(|a| format!("{} ans", a.round() as i64))
@@ -307,6 +321,12 @@ mod tests {
             let date = format!("2026-{m:02}-{:02}", 1 + rnd(28));
             let birth = format!("19{}-0{}-1{}", 35 + rnd(30), 1 + rnd(9), rnd(9));
             let op = ops[rnd(ops.len() as u32) as usize].to_owned();
+            let by = |n: u32| match n {
+                0 => Prescriber::Medecin,
+                1 => Prescriber::Inconnu,
+                _ => Prescriber::Officine,
+            };
+            let prescriber = by(rnd(6));
             out.push(Dose {
                 id: 0,
                 date: date.clone(),
@@ -315,6 +335,7 @@ mod tests {
                 age: None,
                 birth: birth.clone(),
                 operator: op.clone(),
+                prescriber,
             });
             if rnd(3) > 0 {
                 let d2 = add_months(&date, 2 + rnd(4) as i32);
@@ -328,6 +349,7 @@ mod tests {
                         age: None,
                         birth,
                         operator: op,
+                        prescriber: by(rnd(6)),
                     });
                 }
             }

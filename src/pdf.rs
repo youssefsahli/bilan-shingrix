@@ -13,7 +13,9 @@ use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, World};
 
-const TEMPLATE: &str = include_str!("report.typ");
+/// Le modèle d'origine ; un modèle à soi le remplace (`bilan.typ`).
+pub const TEMPLATE: &str = include_str!("report.typ");
+const MARK: &str = "// {{DATA}}";
 
 /// New Computer Modern : le Computer Modern des manuels Texinfo.
 const FONTS: [&[u8]; 3] = [
@@ -130,6 +132,7 @@ pub fn source(
     pending: &[Pending],
     expected: &[(String, usize)],
     head: &Head,
+    template: &str,
 ) -> String {
     let months = array(
         st.months
@@ -191,7 +194,12 @@ pub fn source(
         format!("#let equipe_mois = {team_months}"),
     ]
     .join("\n");
-    TEMPLATE.replacen("// {{DATA}}", &data, 1)
+    // Un modèle qui a perdu la ligne reçoit les chiffres en tête.
+    if template.contains(MARK) {
+        template.replacen(MARK, &data, 1)
+    } else {
+        format!("{data}\n{template}")
+    }
 }
 
 struct ReportWorld {
@@ -246,17 +254,35 @@ pub fn render(
     pending: &[Pending],
     expected: &[(String, usize)],
     head: &Head,
+    template: &str,
 ) -> Result<Vec<u8>, String> {
     let (fonts, book) = fonts();
     let world = ReportWorld {
         library: LazyHash::new(Library::default()),
         book: LazyHash::new(book.clone()),
         fonts: fonts.clone(),
-        source: Source::detached(source(st, pending, expected, head)),
+        source: Source::detached(source(st, pending, expected, head, template)),
     };
     let join = |errs: &[typst::diag::SourceDiagnostic]| {
         errs.iter()
-            .map(|e| e.message.to_string())
+            .map(|e| match world.source.range(e.span) {
+                // La ligne dans le modèle : celle des données n'en compte qu'une.
+                Some(r) => {
+                    let lines = |s: &str| s.matches('\n').count();
+                    let text = world.source.text();
+                    let line = lines(&text[..r.start]) + 1;
+                    // Les lignes que les données ajoutent, après la ligne-repère.
+                    let added = lines(text) - lines(template);
+                    let mark = template.find(MARK).map_or(0, |i| lines(&template[..i]) + 1);
+                    let line = if line > mark + added {
+                        line - added
+                    } else {
+                        line.min(mark)
+                    };
+                    format!("ligne {line} : {}", e.message)
+                }
+                None => e.message.to_string(),
+            })
             .collect::<Vec<_>>()
             .join(" ; ")
     };
@@ -318,7 +344,7 @@ mod tests {
             period: "01/12/2025 – 04/11/2026".into(),
             edited: "04/11/2026".into(),
         };
-        render(&st, &pend, &exp, &head).unwrap_or_else(|e| panic!("{from:?}: {e}"))
+        render(&st, &pend, &exp, &head, TEMPLATE).unwrap_or_else(|e| panic!("{from:?}: {e}"))
     }
 
     /// Vide, un opérateur, huit (plus que la palette), un mois, tout : il
@@ -344,7 +370,55 @@ mod tests {
             period: String::new(),
             edited: String::new(),
         };
-        assert!(!source(&st, &pend, &exp, &head).contains("Zorglub"));
+        assert!(!source(&st, &pend, &exp, &head, TEMPLATE).contains("Zorglub"));
+    }
+
+    /// Un modèle changé : réglages, parties retirées, repère perdu ; une
+    /// faute est dite avec sa ligne dans le modèle.
+    #[test]
+    fn an_edited_template_is_followed() {
+        let doses = year(40, &["YS", "AS"]);
+        let today = "2026-11-04";
+        let st = stats(&doses, "", today);
+        let pend = pending(&patients(&doses), today);
+        let exp = expected_by_month(&pend, today, 6);
+        let head = Head {
+            period: "01/12/2025 – 04/11/2026".into(),
+            edited: "04/11/2026".into(),
+        };
+        let go = |tpl: &str| render(&st, &pend, &exp, &head, tpl);
+        let edited = TEMPLATE
+            .replace(
+                r#"#let titre = "Bilan Shingrix""#,
+                r#"#let titre = "Zona 2026""#,
+            )
+            .replace(
+                r#"#let officine = """#,
+                r#"#let officine = "Pharmacie du Port""#,
+            )
+            .replace("  ages: true,", "  ages: false,")
+            .replace("  equipe: true,", "  equipe: false,")
+            .replace("#let mot = []", "#let mot = [Merci.]");
+        assert_ne!(edited, TEMPLATE);
+        assert!(go(&edited).unwrap().starts_with(b"%PDF"));
+        let none = ["synthese", "mois", "ages", "attente", "equipe"]
+            .iter()
+            .fold(TEMPLATE.to_owned(), |t, k| {
+                t.replace(&format!("  {k}: true,"), &format!("  {k}: false,"))
+            });
+        assert!(go(&none).unwrap().starts_with(b"%PDF"));
+        assert!(go(&TEMPLATE.replace(MARK, ""))
+            .unwrap()
+            .starts_with(b"%PDF"));
+
+        let line = TEMPLATE
+            .lines()
+            .position(|l| l.starts_with("#let mot"))
+            .unwrap()
+            + 1;
+        let broken = TEMPLATE.replace("#let mot = []", "#let mot = [#inconnu]");
+        let err = go(&broken).unwrap_err();
+        assert!(err.contains(&format!("ligne {line} ")), "{err}");
     }
 
     /// `BILAN_SAMPLE_PDF=/chemin.pdf cargo test sample` : un bilan à regarder.
@@ -360,6 +434,19 @@ mod tests {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(70);
-        std::fs::write(out, build(&year(n, &ops), "2025-12-01")).unwrap();
+        // `BILAN_SAMPLE_TEMPLATE=bilan.typ` : avec un modèle à soi.
+        let tpl = std::env::var_os("BILAN_SAMPLE_TEMPLATE")
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .unwrap_or_else(|| TEMPLATE.into());
+        let doses = year(n, &ops);
+        let today = "2026-11-04";
+        let st = stats(&doses, "2025-12-01", today);
+        let pend = pending(&patients(&doses), today);
+        let exp = expected_by_month(&pend, today, 6);
+        let head = Head {
+            period: "01/12/2025 – 04/11/2026".into(),
+            edited: "04/11/2026".into(),
+        };
+        std::fs::write(out, render(&st, &pend, &exp, &head, &tpl).unwrap()).unwrap();
     }
 }

@@ -2,8 +2,26 @@
 // Texinfo : Computer Modern, le titre sur un filet épais, des sections
 // numérotées, des tableaux sans filets, des figures en noir et gris avec
 // leur légende dessous. Les données arrivent en tête, écrites par
-// `src/pdf.rs`.
+// `src/pdf.rs`. Fichier > Modèle du bilan… copie ce modèle à côté du
+// registre (`bilan.typ`) : le bilan suit alors la copie, qu'on change à
+// volonté. Garder la ligne {{DATA}} : les chiffres y entrent.
 // {{DATA}}
+
+// --- Réglages ----------------------------------------------------------
+#let titre = "Bilan Shingrix"
+// Sous le titre, avant l'équipe ; "" pour rien.
+#let officine = ""
+// false pour retirer une partie.
+#let parties = (
+  synthese: true,
+  mois: true,
+  ages: true,
+  attente: true,
+  equipe: true,
+)
+// Un texte libre en fin de bilan ; [] pour rien.
+#let mot = []
+// -----------------------------------------------------------------------
 
 #let fills = (
   luma(35),
@@ -18,7 +36,7 @@
 #let fill-of(i) = fills.at(calc.rem(i, fills.len()))
 #let swatch(f) = box(width: 0.8em, height: 0.8em, baseline: 0.1em, fill: f, stroke: 0.4pt)
 
-#set document(title: "Bilan Shingrix")
+#set document(title: titre)
 #set text(font: "New Computer Modern", size: 10.5pt, lang: "fr")
 #set par(justify: true, leading: 0.6em, spacing: 0.9em, first-line-indent: 1.2em)
 #set page(
@@ -36,7 +54,7 @@
         [#numbering("1", ..counter(heading).at(h.location())) #h.body]
       } else { [] }
       if calc.even(n) {
-        grid(columns: (auto, 1fr), str(n), align(right)[Bilan Shingrix])
+        grid(columns: (auto, 1fr), str(n), align(right, titre))
       } else {
         grid(columns: (1fr, auto), sec, str(n))
       }
@@ -50,15 +68,11 @@
 #show heading.where(level: 2): set text(size: 12pt, weight: "bold")
 
 #set table(stroke: none, inset: (x: 0.5em, y: 0.32em))
-#set figure(gap: 0.9em, supplement: [Figure])
-#show figure: set block(breakable: false, above: 1.4em, below: 1.4em)
-#set figure.caption(separator: [ : ])
-#show figure.caption: it => align(left, it)
 
 // La page de titre de Texinfo, resserrée : le titre, le filet de 4 pt,
 // les sous-titres au fer à droite, l'auteur en gras, le filet de 2 pt.
 #block(below: 2.2em)[
-  #text(24.9pt, weight: "bold")[Bilan Shingrix]
+  #text(24.9pt, weight: "bold", titre)
   #v(-0.9em)
   #line(length: 100%, stroke: 4pt)
   #v(-0.3em)
@@ -67,6 +81,7 @@
     #text(12pt)[Édité le #edite]
   ]
   #v(0.6em)
+  #if officine != "" { block(text(12pt, officine)) }
   #block(text(12pt, weight: "bold",
     if equipe.len() > 0 [Équipe : #equipe.map(o => o.at(0)).join(", ")] else [Officine]))
   #v(-0.7em)
@@ -112,7 +127,11 @@
 }
 
 #let mention(f, name) = box[#swatch(f)~#name]
+// Sous un diagramme à plusieurs séries, leurs trames, sans phrase.
+#let legend(..items) = block(above: 0.6em, below: 1.4em,
+  text(8pt, items.pos().join(h(1.2em))))
 
+#if parties.synthese [
 = Synthèse
 
 Ce bilan compte les doses de Shingrix faites à l'officine sur la période,
@@ -139,15 +158,16 @@ seulement des comptes, et les initiales de l'équipe.
   ([Dues], [D2 qu'on peut faire aujourd'hui ; en retard, celles dont la fenêtre est passée.]),
   ([À venir], [D2 attendues dans les six prochains mois.]),
 )
+]
 
+#if parties.mois [
 = Doses par mois
 
-#figure(
-  chart(mois, h: 36mm),
-  caption: [Doses par mois : #mention(fill-of(0), [D1]), #mention(fill-of(1), [D2]).],
-)
+#chart(mois, h: 36mm)
+#legend(mention(fill-of(0), [D1]), mention(fill-of(1), [D2]))
+]
 
-#block(breakable: false, width: 100%)[
+#if parties.ages { block(breakable: false, width: 100%)[
 = Âges
 
 L'âge est celui du jour de la dose, tiré de la date de naissance quand
@@ -164,17 +184,15 @@ elle est connue.
     box(width: if total > 0 { 50mm * n / total } else { 0mm }, height: 0.7em, fill: luma(150), stroke: if n > 0 { 0.4pt } else { none }),
   )).flatten(),
 ))
-]
+] }
 
+#if parties.attente [
 = Deuxièmes doses à venir
 
-#figure(
-  chart(attente, h: 30mm, shift: 1),
-  caption: [D2 attendues, par mois d'ouverture de leur fenêtre. Le mois en
-  cours compte aussi celles qui sont déjà dues.],
-)
+#chart(attente, h: 30mm, shift: 1)
+]
 
-#if equipe.len() > 0 [
+#if parties.equipe and equipe.len() > 0 [
   = Équipe
 
   Chaque dose porte les initiales de qui l'a faite. Le délai d'une D2 se
@@ -195,9 +213,9 @@ elle est connue.
     )).flatten(),
   )
 
-  #figure(
-    chart(equipe_mois, h: 38mm),
-    caption: [Doses par mois et par opérateur :
-      #equipe.enumerate().map(((i, o)) => mention(fill-of(i), o.at(0))).join(", ").],
-  )
+  #v(1.4em)
+  #chart(equipe_mois, h: 38mm)
+  #legend(..equipe.enumerate().map(((i, o)) => mention(fill-of(i), o.at(0))))
 ]
+
+#if mot != [] { v(1.8em); mot }

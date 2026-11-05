@@ -551,6 +551,20 @@ impl App {
                             ui.close_menu();
                             self.export_csv();
                         }
+                        if ui.button("Modèle du bilan…").clicked() {
+                            ui.close_menu();
+                            self.edit_template();
+                        }
+                        if ui
+                            .add_enabled(
+                                self.template_path().exists(),
+                                egui::Button::new("Modèle d'origine"),
+                            )
+                            .clicked()
+                        {
+                            ui.close_menu();
+                            self.reset_template();
+                        }
                         if ui
                             .add(egui::Button::new("Quitter").shortcut_text("C-q"))
                             .clicked()
@@ -1477,15 +1491,65 @@ impl App {
             });
     }
 
+    /// Le modèle à soi, à côté du registre.
+    fn template_path(&self) -> std::path::PathBuf {
+        self.path.with_file_name("bilan.typ")
+    }
+
+    /// Copie le modèle d'origine s'il n'y en a pas, et l'ouvre.
+    fn edit_template(&mut self) {
+        let to = self.template_path();
+        if !to.exists() {
+            let made = to
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&to, pdf::TEMPLATE));
+            if let Err(e) = made {
+                self.note = Some(format!("{}: {e}", to.display()));
+                return;
+            }
+        }
+        if open::that_detached(&to).is_err() {
+            let _ = to.parent().map(open::that_detached);
+        }
+        self.note = Some(format!("Modèle {} ; C-p le suit", to.display()));
+    }
+
+    /// Revient au modèle d'origine ; le modèle à soi est gardé à côté.
+    fn reset_template(&mut self) {
+        let from = self.template_path();
+        let kept = (1..)
+            .map(|i| from.with_file_name(format!("bilan-{}-{i}.typ", self.today)))
+            .find(|p| !p.exists())
+            .unwrap_or_else(|| from.with_extension("typ.ancien"));
+        self.note = Some(match std::fs::rename(&from, &kept) {
+            Ok(()) => format!("Modèle d'origine ; l'ancien gardé : {}", kept.display()),
+            Err(e) => format!("{}: {e}", from.display()),
+        });
+    }
+
     fn make_pdf(&mut self) {
         let head = pdf::Head {
             period: self.period_said(),
             edited: model::french(&self.today),
         };
-        let bytes = match pdf::render(&self.stats, &self.pending, &self.expected, &head) {
+        let own = self.template_path();
+        let template = match std::fs::read_to_string(&own) {
+            Ok(t) => Some(t),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                self.note = Some(format!("{}: {e}", own.display()));
+                return;
+            }
+        };
+        let tpl = template.as_deref().unwrap_or(pdf::TEMPLATE);
+        let bytes = match pdf::render(&self.stats, &self.pending, &self.expected, &head, tpl) {
             Ok(b) => b,
             Err(e) => {
-                self.note = Some(format!("PDF : {e}"));
+                self.note = Some(match template {
+                    Some(_) => format!("bilan.typ, {e}"),
+                    None => format!("PDF : {e}"),
+                });
                 return;
             }
         };

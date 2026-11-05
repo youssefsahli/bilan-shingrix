@@ -19,6 +19,12 @@ modifie ; Supprimer demande confirmation dans la zone d'écho (o ou n).
 Le PDF suit la période choisie : synthèse, doses par mois, âges, D2 à
 venir, comparaison de l'équipe. Aucun nom de patient.
 
+Fichier > Modèle du bilan… copie le modèle Typst à côté du registre
+(`bilan.typ`) et l'ouvre. En tête, les réglages : titre, nom de
+l'officine, parties à garder, texte de fin ; le reste se change aussi.
+Le bilan suit ce fichier ; une faute est dite avec sa ligne. Modèle
+d'origine le met de côté (`bilan-AAAA-MM-JJ-1.typ`).
+
     cargo run --release
     cargo test
     BILAN_SAMPLE_PDF=/tmp/bilan.pdf cargo test sample

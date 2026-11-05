@@ -755,85 +755,30 @@ pub struct Imported {
     pub known: usize,
     /// Lignes illisibles : (numéro, raison).
     pub refused: Vec<(usize, String)>,
+    /// Laissées de côté : un autre produit, un retour.
+    pub skipped: crate::import::Skipped,
 }
 
-/// Lit un CSV au format de l'export
-/// (`date;dose;patient;age;ddn;operateur;prescripteur`) et l'ajoute au
-/// registre. Une ligne d'en-tête fixe l'ordre des colonnes (les autres
-/// sont ignorées) ; sans elle, l'ordre de l'export. Une dose vide se déduit : D2 quand le patient
-/// a une D1 sans D2 d'au moins quatre semaines, sinon D1. Une ligne déjà
-/// au registre (même jour, même patient) n'est pas reprise.
+/// Lit un CSV dont l'en-tête nomme les colonnes (l'export de ce programme,
+/// `date;dose;patient;age;ddn;operateur;prescripteur`, ou un autre que
+/// `import::guess` reconnaît) et l'ajoute au registre. L'écran passe par
+/// `import::doses`, pour laisser choisir les colonnes.
+#[cfg(test)]
 pub fn import_csv(store: &mut Store, text: &str, today: &str) -> Imported {
+    let table = crate::import::read_table(text);
+    let mapping = crate::import::guess(&table.heads);
+    let (rows, refused, skipped) = crate::import::doses(&table, &mapping, today);
+    let mut out = add_imported(store, rows);
+    out.refused = refused;
+    out.skipped = skipped;
+    out
+}
+
+/// Ajoute des doses lues. Une dose de rang 0 se déduit : D2 quand le
+/// patient a une D1 sans D2 d'au moins quatre semaines, sinon D1. Une
+/// dose déjà au registre (même jour, même patient) n'est pas reprise.
+pub fn add_imported(store: &mut Store, mut rows: Vec<(usize, Dose)>) -> Imported {
     let mut out = Imported::default();
-    let mut rows: Vec<(usize, Dose)> = Vec::new();
-    const NAMES: [&str; 7] = [
-        "date",
-        "dose",
-        "patient",
-        "age",
-        "ddn",
-        "operateur",
-        "prescripteur",
-    ];
-    let mut place: [Option<usize>; 7] = std::array::from_fn(Some);
-    for (i, line) in text.lines().enumerate() {
-        let n = i + 1;
-        let line = line.trim_start_matches('\u{feff}').trim();
-        if line.is_empty() {
-            continue;
-        }
-        let f: Vec<&str> = line.split(';').map(str::trim).collect();
-        if i == 0 && fold(f[0]) == "date" {
-            let heads: Vec<String> = f.iter().map(|h| fold(h)).collect();
-            place = NAMES.map(|k| heads.iter().position(|h| h == k));
-            continue;
-        }
-        let at = |k: usize| place[k].and_then(|p| f.get(p)).copied().unwrap_or("");
-        let Some(date) = parse_date(at(0), today) else {
-            out.refused.push((n, "date illisible".into()));
-            continue;
-        };
-        let rank = match at(1).to_uppercase().trim_start_matches('D') {
-            "1" => 1,
-            "2" => 2,
-            "" => 0,
-            _ => {
-                out.refused.push((n, "dose illisible".into()));
-                continue;
-            }
-        };
-        let birth = match at(4) {
-            "" => String::new(),
-            b => match parse_date(b, today) {
-                Some(b) => b,
-                None => {
-                    out.refused.push((n, "DDN illisible".into()));
-                    continue;
-                }
-            },
-        };
-        let Some(operator) = operator_key(at(5)) else {
-            out.refused.push((n, "opérateur manquant".into()));
-            continue;
-        };
-        let Some(prescriber) = Prescriber::read(at(6)) else {
-            out.refused.push((n, "prescripteur illisible".into()));
-            continue;
-        };
-        rows.push((
-            n,
-            Dose {
-                id: 0,
-                date,
-                rank,
-                name: at(2).to_owned(),
-                age: at(3).parse().ok(),
-                birth,
-                operator,
-                prescriber,
-            },
-        ));
-    }
     rows.sort_by(|a, b| a.1.date.cmp(&b.1.date).then(a.0.cmp(&b.0)));
     let same = |a: &Dose, b: &Dose| {
         !a.name.trim().is_empty()
@@ -1058,15 +1003,20 @@ mod tests {
             02/09/2026;ng;1;off.;B\n\
             03/09/2026;ng;1;voisin;C\n";
         let r = import_csv(&mut s, csv, "2026-11-04");
-        assert_eq!((r.added, r.refused.len()), (2, 1));
+        assert_eq!((r.added, r.refused.len()), (3, 0));
+        // Un prescripteur qui n'est pas l'officine : un médecin.
         assert_eq!(
             s.doses.iter().map(|d| d.prescriber).collect::<Vec<_>>(),
-            [Prescriber::Medecin, Prescriber::Officine]
+            [
+                Prescriber::Medecin,
+                Prescriber::Officine,
+                Prescriber::Medecin
+            ]
         );
         let st = stats(&s.doses, "", "2026-11-04");
         assert_eq!(
             (st.by_pharmacy, st.by_doctor, st.team[0].pharmacy),
-            (1, 1, 1)
+            (1, 2, 1)
         );
     }
 

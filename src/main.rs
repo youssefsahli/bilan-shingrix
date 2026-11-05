@@ -6,6 +6,7 @@
 //! Un fichier JSON dans le dossier de données (`BILAN_FILE` pour un autre,
 //! `BILAN_TAB` pour ouvrir sur un onglet).
 
+mod import;
 mod model;
 mod pdf;
 mod theme;
@@ -174,6 +175,20 @@ struct App {
     note: Option<String>,
     /// Ce que dit l'élément survolé (`help-echo`), le temps d'une image.
     hover: Option<String>,
+    /// Un import en cours : le tampon `*Import*` remplace l'onglet.
+    import: Option<ImportView>,
+}
+
+/// Un fichier ouvert pour l'import, le choix de ses colonnes et ce qu'il
+/// donnerait.
+struct ImportView {
+    file: String,
+    table: import::Table,
+    mapping: import::Mapping,
+    /// Le choix dont `preview` est le résultat.
+    seen: Option<import::Mapping>,
+    preview: Vec<Dose>,
+    result: model::Imported,
 }
 
 impl App {
@@ -214,6 +229,7 @@ impl App {
             due_filter: None,
             note,
             hover: None,
+            import: None,
         };
         app.scene();
         app
@@ -240,6 +256,12 @@ impl App {
                 self.entry.name = "mar".into();
                 self.entry.operator = "ys".into();
                 self.pick = Some(1);
+            }
+            "import" => {
+                self.open_import("exemple-lgpi.csv", import::SAMPLE);
+                if let Some(v) = self.import.as_mut() {
+                    v.mapping.operator_codes = "03=YS 05=AS".into();
+                }
             }
             "modifier" | "supprimer" => {
                 if let Some(d) = last {
@@ -637,7 +659,11 @@ impl App {
             .show_separator_line(false)
             .show(ctx, |ui| {
                 let flag = if self.locked { "-:%%-  " } else { "-:---  " };
-                let name = format!("{:<12}", TABS[self.tab.min(TABS.len() - 1)]);
+                let name = if self.import.is_some() {
+                    format!("{:<12}", "*Import*")
+                } else {
+                    format!("{:<12}", TABS[self.tab.min(TABS.len() - 1)])
+                };
                 let info = self.mode_info();
                 t::mode_line(
                     ui,
@@ -653,6 +679,7 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(8.0, 6.0)),
             )
             .show(ctx, |ui| match self.tab {
+                _ if self.import.is_some() => self.import_view(ui),
                 0 => self.entry_tab(ui),
                 1 => self.bilan_tab(ui),
                 2 => self.team_tab(ui),
@@ -1603,36 +1630,298 @@ impl App {
         });
     }
 
-    /// Un CSV au format de l'export, la dose pouvant rester vide.
+    /// Le choix des colonnes gardé pour le fichier suivant.
+    fn mapping_path(&self) -> std::path::PathBuf {
+        self.path.with_file_name("import.json")
+    }
+
+    /// Choisit un CSV et ouvre le tampon `*Import*`.
     fn import_csv(&mut self) {
         let Some(from) = rfd::FileDialog::new()
-            .add_filter("CSV", &["csv", "txt"])
+            .add_filter("CSV", &["csv", "txt", "tsv"])
             .pick_file()
         else {
             self.note = Some("Abandon".into());
             return;
         };
-        let text = match std::fs::read(&from) {
-            // Un export de tableur peut être en Latin-1 : ses octets en caractères.
-            Ok(b) => String::from_utf8(b)
-                .unwrap_or_else(|e| e.into_bytes().iter().map(|&c| c as char).collect()),
-            Err(e) => {
-                self.note = Some(format!("{}: {e}", from.display()));
-                return;
+        match std::fs::read(&from) {
+            Ok(b) => {
+                let name = from
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.open_import(&name, &import::decode(&b));
             }
+            Err(e) => self.note = Some(format!("{}: {e}", from.display())),
+        }
+    }
+
+    /// Le choix gardé s'il va à ce fichier, sinon celui qu'on devine — en
+    /// gardant les réglages (codes, mots, filtre).
+    fn open_import(&mut self, file: &str, text: &str) {
+        let table = import::read_table(text);
+        if table.rows.is_empty() {
+            self.note = Some(format!("{file} : aucune ligne"));
+            return;
+        }
+        let saved: Option<import::Mapping> = std::fs::read_to_string(self.mapping_path())
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+        let mapping = match saved {
+            Some(m) if m.fits(&table.heads) => m,
+            Some(m) => import::Mapping {
+                product_filter: m.product_filter,
+                operator_fixed: m.operator_fixed,
+                operator_codes: m.operator_codes,
+                officine_words: m.officine_words,
+                ..import::guess(&table.heads)
+            },
+            None => import::guess(&table.heads),
         };
-        let r = model::import_csv(&mut self.store, &text, &self.today);
+        self.import = Some(ImportView {
+            file: file.to_owned(),
+            table,
+            mapping,
+            seen: None,
+            preview: Vec::new(),
+            result: model::Imported::default(),
+        });
+        self.edit = None;
+        self.confirm_delete = None;
+    }
+
+    /// Ce que le choix donnerait, sur une copie du registre ; refait quand
+    /// le choix change, pas à chaque image.
+    fn import_preview(&mut self) {
+        let Some(v) = self.import.as_mut() else {
+            return;
+        };
+        if v.seen.as_ref() == Some(&v.mapping) {
+            return;
+        }
+        let mut copy = self.store.clone();
+        let before = copy.doses.len();
+        let (rows, refused, skipped) = import::doses(&v.table, &v.mapping, &self.today);
+        v.result = model::add_imported(&mut copy, rows);
+        v.result.refused = refused;
+        v.result.skipped = skipped;
+        v.preview = copy.doses.split_off(before);
+        v.seen = Some(v.mapping.clone());
+    }
+
+    fn finish_import(&mut self) {
+        let Some(v) = self.import.take() else {
+            return;
+        };
+        let (rows, refused, skipped) = import::doses(&v.table, &v.mapping, &self.today);
+        let r = model::add_imported(&mut self.store, rows);
         if r.added > 0 {
             self.save();
         }
-        let mut said = format!("{} doses ajoutées, {} déjà là", r.added, r.known);
-        if let Some((n, why)) = r.refused.first() {
-            said.push_str(&format!(
-                ", {} refusées (ligne {n} : {why})",
-                r.refused.len()
-            ));
+        if let Ok(text) = serde_json::to_string_pretty(&v.mapping) {
+            let _ = std::fs::write(self.mapping_path(), text);
+        }
+        let mut said = format!(
+            "{} : {} doses ajoutées, {} déjà là",
+            v.file, r.added, r.known
+        );
+        if !refused.is_empty() {
+            said.push_str(&format!(", {} refusées", refused.len()));
+        }
+        if skipped.returns > 0 {
+            said.push_str(&format!(", {} retours", skipped.returns));
         }
         self.note = Some(said);
+        self.tab = 0;
+    }
+
+    /// Le tampon `*Import*` : les colonnes à choisir, les réglages, ce que
+    /// l'import ajouterait.
+    fn import_view(&mut self, ui: &mut egui::Ui) {
+        self.import_preview();
+        let c = t::ch(ui);
+        let rh = t::row_h(ui);
+        let Some(v) = self.import.as_mut() else {
+            return;
+        };
+        let (mut go, mut cancel) = (false, ui.input(|i| i.key_pressed(Key::Escape)));
+        t::heading(
+            ui,
+            "Importer",
+            &format!("{}, {} lignes", v.file, v.table.rows.len()),
+        );
+        let heads = v.table.heads.clone();
+        // Deux colonnes de choix, côte à côte quand la place le permet.
+        let label_w = 18.0 * c;
+        let pick_w = 26.0 * c;
+        let per_row = if ui.available_width() >= 2.0 * (label_w + pick_w + 4.0 * c) {
+            2
+        } else {
+            1
+        };
+        let n = import::COLUMNS.len();
+        for start in (0..n).step_by(per_row) {
+            ui.horizontal(|ui| {
+                ui.set_min_height(rh);
+                for i in start..(start + per_row).min(n) {
+                    let (label, needed) = import::COLUMNS[i];
+                    cell(ui, label_w, |ui| ui.label(t::shadow(label)));
+                    let current = v.mapping.column_mut(i);
+                    let shown = if current.is_empty() {
+                        "-".to_owned()
+                    } else {
+                        current.clone()
+                    };
+                    let r = egui::ComboBox::from_id_salt(("imp_col", i))
+                        .selected_text(shown)
+                        .width(pick_w - 2.0 * c)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(current, String::new(), "-");
+                            for h in &heads {
+                                ui.selectable_value(current, h.clone(), h);
+                            }
+                        });
+                    if needed && current.is_empty() {
+                        t::squiggle(ui, r.response.rect);
+                    }
+                    ui.add_space(4.0 * c);
+                }
+            });
+        }
+        ui.add_space(rh * 0.3);
+        let texts: [(&str, &str, &str); 4] = [
+            ("Produit contient", "imp_filter", "shingrix"),
+            ("Opérateur fixe", "imp_fixed", "si la colonne est vide"),
+            ("Codes vendeur", "imp_codes", "03=YS 05=AS"),
+            ("Officine si", "imp_off", "mots de la colonne Prescripteur"),
+        ];
+        for (i, (label, id, hint)) in texts.into_iter().enumerate() {
+            ui.horizontal(|ui| {
+                cell(ui, label_w, |ui| ui.label(t::shadow(label)));
+                let buf = match i {
+                    0 => &mut v.mapping.product_filter,
+                    1 => &mut v.mapping.operator_fixed,
+                    2 => &mut v.mapping.operator_codes,
+                    _ => &mut v.mapping.officine_words,
+                };
+                let w = (ui.available_width() - c).clamp(20.0 * c, 60.0 * c);
+                t::field(ui, id, buf, w, hint);
+            });
+        }
+        ui.add_space(rh * 0.3);
+        // Le compte, puis les boutons.
+        let r = &v.result;
+        let mut said = format!("{} à ajouter", r.added);
+        for (k, one, many) in [
+            (r.known, "déjà là", "déjà là"),
+            (r.refused.len(), "refusée", "refusées"),
+            (r.skipped.other, "autre produit", "autres produits"),
+            (r.skipped.returns, "retour", "retours"),
+        ] {
+            if k > 0 {
+                said.push_str(&format!(", {k} {}", if k == 1 { one } else { many }));
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(said).strong());
+            ui.add_space(2.0 * c);
+            go |= ui
+                .add_enabled_ui(!self.locked && r.added > 0, |ui| t::button(ui, "Importer"))
+                .inner
+                .clicked();
+            ui.add_space(c);
+            cancel |= t::button(ui, "Annuler").clicked();
+        });
+        for (line, why) in r.refused.iter().take(3) {
+            ui.label(egui::RichText::new(format!("ligne {line} : {why}")).color(t::ERROR));
+        }
+        if r.refused.len() > 3 {
+            ui.label(t::shadow(format!("… et {} autres", r.refused.len() - 3)));
+        }
+        // Le fichier tel qu'il est, ses premières lignes : de quoi choisir.
+        t::heading(ui, "Fichier", "les premières lignes");
+        let shown: Vec<&Vec<String>> = v.table.rows.iter().take(4).map(|r| &r.1).collect();
+        let widths: Vec<f32> = heads
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let longest = shown
+                    .iter()
+                    .filter_map(|r| r.get(i))
+                    .chain([h])
+                    .map(|s| s.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                (longest.clamp(4, 24) + 2) as f32 * c
+            })
+            .collect();
+        egui::ScrollArea::horizontal()
+            .id_salt("import_file")
+            .show(ui, |ui| {
+                let total: f32 = widths.iter().sum::<f32>() + 2.0 * c;
+                ui.set_min_width(total);
+                let names: Vec<&str> = heads.iter().map(String::as_str).collect();
+                ui.allocate_ui(Vec2::new(total, rh), |ui| {
+                    t::header_line(ui, &widths, &names, c)
+                });
+                for r in &shown {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(total, rh), Sense::hover());
+                    let cells: Vec<Cell> = (0..heads.len())
+                        .map(|i| cl(r.get(i).cloned().unwrap_or_default()))
+                        .collect();
+                    paint_row(ui, rect, &widths, &cells);
+                }
+            });
+        // L'aperçu : les doses telles qu'elles entreraient au registre.
+        t::heading(ui, "Aperçu", "ce que l'import ajouterait");
+        let cols = register_columns(ui);
+        t::header_line(
+            ui,
+            &cols,
+            &[
+                "Date", "Dose", "Patient", "Âge", "DDN", "Opér.", "Prescr.", "",
+            ],
+            c,
+        );
+        let none = || cl("-").color(t::SHADOW);
+        egui::ScrollArea::vertical()
+            .id_salt("import_preview")
+            .auto_shrink([false, false])
+            .show_rows(ui, rh, v.preview.len(), |ui, range| {
+                for d in &v.preview[range] {
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(ui.available_width(), rh), Sense::hover());
+                    let cells = [
+                        cl(model::french(&d.date)),
+                        cl(if d.rank == 2 { "D2" } else { "D1" }),
+                        if d.name.is_empty() {
+                            none()
+                        } else {
+                            cl(d.name.clone())
+                        },
+                        model::dose_age(d).map_or_else(none, |a| cl(a.to_string())),
+                        if d.birth.is_empty() {
+                            none()
+                        } else {
+                            cl(model::french(&d.birth))
+                        },
+                        cl(d.operator.clone()).bold(),
+                        match d.prescriber {
+                            model::Prescriber::Inconnu => none(),
+                            model::Prescriber::Medecin => cl("méd.").color(t::SHADOW),
+                            model::Prescriber::Officine => cl("off."),
+                        },
+                        cl(""),
+                    ];
+                    paint_row(ui, rect, &cols, &cells);
+                }
+            });
+        if cancel {
+            self.import = None;
+            self.note = Some("Import abandonné".into());
+        } else if go {
+            self.finish_import();
+        }
     }
 
     fn export_csv(&mut self) {
@@ -1905,7 +2194,7 @@ mod tests {
         for path in [full, empty] {
             for size in [[980.0, 620.0], [1200.0, 780.0], [1920.0, 1080.0]] {
                 for tab in 0..TABS.len() {
-                    for scene in ["", "connus", "modifier", "supprimer"] {
+                    for scene in ["", "connus", "modifier", "supprimer", "import"] {
                         for period in Period::ALL {
                             let ctx = egui::Context::default();
                             t::apply(&ctx);
@@ -1962,6 +2251,42 @@ mod tests {
 
     /// Au clavier : un nom, Entrée, la dose est au registre ; puis la
     /// question de la zone d'écho, « n » la laisse, « o » la supprime.
+    #[test]
+    fn an_import_is_previewed_then_added_and_its_choice_kept() {
+        let dir = std::env::temp_dir().join(format!("bilan-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doses.json");
+        let ctx = egui::Context::default();
+        t::apply(&ctx);
+        let mut app = App::new(path.clone());
+        app.open_import("exemple.csv", import::SAMPLE);
+        run(&ctx, &mut app, vec![]);
+        // Sans codes vendeur, aucune ligne n'a d'initiales.
+        assert_eq!(app.import.as_ref().unwrap().result.added, 0);
+        app.import.as_mut().unwrap().mapping.operator_codes = "03=YS 05=AS".into();
+        run(&ctx, &mut app, vec![]);
+        let v = app.import.as_ref().unwrap();
+        assert_eq!((v.result.added, v.preview.len()), (2, 2));
+        assert!(
+            app.store.doses.is_empty(),
+            "l'aperçu ne touche pas au registre"
+        );
+        app.finish_import();
+        assert!(app.import.is_none());
+        assert_eq!(Store::load(&path).unwrap().doses.len(), 2);
+        // Le fichier suivant reprend le choix gardé ; rien n'est en double.
+        app.open_import("exemple.csv", import::SAMPLE);
+        assert_eq!(
+            app.import.as_ref().unwrap().mapping.operator_codes,
+            "03=YS 05=AS"
+        );
+        run(&ctx, &mut app, vec![]);
+        assert_eq!(app.import.as_ref().unwrap().result.known, 2);
+        run(&ctx, &mut app, vec![key(Key::Escape)]);
+        assert!(app.import.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_keyboard_enters_and_deletes_a_dose() {
         let dir = std::env::temp_dir().join(format!("bilan-keys-{}", std::process::id()));

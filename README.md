@@ -10,12 +10,19 @@ manuel GNU imprimé par Texinfo, en Computer Modern.
 Onglets : Saisie · Bilan · Équipe · Rappels. Menu Fichier : Bilan PDF,
 Importer CSV, Exporter CSV.
 
-Importer CSV lit le format de l'export
-(`date;dose;patient;age;ddn;operateur;prescripteur`), dans l'ordre de
-l'en-tête s'il y en a un. Prescripteur : `officine`, `medecin` ou vide.
-Une dose vide se déduit : D2 quand le patient a une D1 sans D2 d'au moins
-quatre semaines, sinon D1. Une dose déjà au registre (même jour, même
-patient) n'est pas reprise.
+Importer CSV ouvre le tampon `*Import*` : un CSV quelconque (export de
+LGPI, d'un tableur, ou de ce programme ; `;`, tabulation ou `,` ; UTF-8 ou
+Latin-1). Chaque colonne se choisit (Date, Patient, Prénom, DDN, Âge, Dose,
+Opérateur, Prescripteur, Quantité, Produit) ; elles se devinent par leur
+en-tête. Réglages : le mot que doit contenir le produit (`shingrix`), des
+initiales fixes, les codes vendeur (`03=YS 05=AS`), les mots qui désignent
+l'officine dans la colonne prescripteur (une autre valeur : un médecin).
+Les premières lignes du fichier et l'aperçu de ce qui entrerait se
+voient avant d'importer ; les retours (quantité ≤ 0) et les autres
+produits sont laissés de côté. Une dose vide se déduit : D2 quand le
+patient a une D1 sans D2 d'au moins quatre semaines, sinon D1. Une dose
+déjà au registre (même jour, même patient) n'est pas reprise. Le choix se
+garde dans `import.json`, à côté du registre.
 
 Saisie : Date · Dose · Patient · Âge · DDN · Opér. (obligatoire, casse
 indifférente) · Prescrit (off. : par l'équipe, ce qu'on compte ; méd. :
@@ -38,7 +45,7 @@ d'origine le met de côté (`bilan-AAAA-MM-JJ-1.typ`).
     BILAN_SAMPLE_PDF=/tmp/bilan.pdf cargo test sample
 
 Captures : `BILAN_TAB=0..3`, `BILAN_SIZE=1024x700`,
-`BILAN_SCENE=connus|modifier|supprimer`.
+`BILAN_SCENE=connus|modifier|supprimer|import`.
 
 Polices : New Computer Modern (GUST Font License) et DejaVu Sans Mono
 (licence Bitstream Vera), `fonts/LICENCES.txt`.

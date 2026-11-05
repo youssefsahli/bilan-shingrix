@@ -1,6 +1,6 @@
 [package]
 name = "bilan-shingrix"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Registre des doses de Shingrix à l'officine : saisie en colonnes, graphiques, prévisions des 2es doses, bilan PDF."
 publish = false
